@@ -10,30 +10,81 @@ type pwsh struct{}
 var Pwsh Shell = pwsh{}
 
 func (sh pwsh) Hook() (string, error) {
-	const hook = `using namespace System;
-using namespace System.Management.Automation;
+	const hook = `using namespace System
+using namespace System.Management.Automation
 
 if ($PSVersionTable.PSVersion.Major -lt 7 -or ($PSVersionTable.PSVersion.Major -eq 7 -and $PSVersionTable.PSVersion.Minor -lt 2)) {
     throw "direnv: PowerShell version $($PSVersionTable.PSVersion) does not meet the minimum required version 7.2!"
 }
 
-$hook = [EventHandler[LocationChangedEventArgs]] {
-  param([object] $source, [LocationChangedEventArgs] $eventArgs)
-  end {
-    $export = ({{.SelfPath}} export pwsh) -join [Environment]::NewLine;
-    if ($export) {
-      Invoke-Expression -Command $export;
-    }
-  }
-};
-$currentAction = $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction;
-if ($currentAction) {
-  $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction = [Delegate]::Combine($currentAction, $hook);
-}
-else {
-  $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction = $hook;
-};
+Write-Debug 'direnv: creating function ''Register-DirenvHook'''
+function Register-DirenvHook {
+    [CmdletBinding()]
+    param ()
 
+    $new_hooks = [Delegate[]] @(
+        [EventHandler[LocationChangedEventArgs]] {
+            <# direnv_hook #>
+            param([object] $source, [LocationChangedEventArgs] $eventArgs)
+            end {
+                $export = {{.SelfPath}} export pwsh | Out-String
+                if ($export.Trim()) {
+                    Write-Debug "direnv: $export"
+                    Invoke-Expression -Command $export
+                }
+            }
+        }
+    )
+    Write-Debug "direnv: adding new hook '$($new_hooks.Method.Name)'"
+
+    $old_hooks = $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction
+
+    if ($old_hooks -is [object]) {
+        $enumerator = [Delegate]::EnumerateInvocationList($old_hooks)
+        while ($enumerator.MoveNext()) {
+            $hook = $enumerator.Current
+            if ($hook.Target.Constants -notmatch '<# direnv_hook #>') {
+                $new_hooks += $hook
+            } else {
+                Write-Debug "direnv: removing old hook '$($hook.Method.Name)'"
+            }
+        }
+    }
+    
+    $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction = [Delegate]::Combine($new_hooks)
+}
+
+Write-Debug 'direnv: creating function ''Unregister-DirenvHook'''
+function Unregister-DirenvHook {
+    [CmdletBinding()]
+    param ()
+
+    $old_hooks = $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction
+
+    if ($old_hooks -isnot [object]) { return }
+
+    $new_hooks = [Delegate[]] @()
+
+    $enumerator = [Delegate]::EnumerateInvocationList($old_hooks)
+    while ($enumerator.MoveNext()) {
+        $hook = $enumerator.Current
+        if ($hook.Target.Constants -notmatch '<# direnv_hook #>') {
+            $new_hooks += $hook
+        } else {
+            Write-Debug "direnv: removing old hook '$($hook.Method.Name)'"
+        }
+    }
+    
+    if ($new_hooks.Count -gt 0) {
+        $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction = [Delegate]::Combine($new_hooks)
+    } else {
+        Write-Debug 'direnv: clearing all hooks'
+        $ExecutionContext.SessionState.InvokeCommand.LocationChangedAction = $null
+    }
+}
+
+Write-Debug 'direnv: invoking function ''Register-DirenvHook'''
+Register-DirenvHook
 `
 	return hook, nil
 }
