@@ -260,6 +260,9 @@ Invoke-Test "utf-8" -Test {
 }
 
 Invoke-Test "failure" -Test {
+  Remove-Item "env:/DIRENV_DIFF"
+  Remove-Item "env:/DIRENV_WATCHES"
+
   # Test that DIRENV_DIFF and DIRENV_WATCHES are set even after a failure.
   #
   # This is needed so that direnv doesn't go into a loop when the loading
@@ -274,6 +277,9 @@ Invoke-Test "failure" -Test {
 }
 
 Invoke-Test "watch-dir" -Test {
+  Remove-Item "env:/DIRENV_WATCHES"
+  Remove-Item "env:/WATCHES"
+
   Write-Host "no watches by default"
   Assert-Equal $env:DIRENV_WATCHES $env:WATCHES
 
